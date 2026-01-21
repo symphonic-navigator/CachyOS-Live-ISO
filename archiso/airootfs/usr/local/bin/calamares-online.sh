@@ -1,5 +1,54 @@
 #!/bin/bash
 
+patch_calamares_settings() {
+    local settings="/etc/calamares/settings.conf"
+    local instance_block
+    local tmp
+
+    instance_block=$(cat <<'EOF'
+- id:       bootstrap
+  module:   shellprocess
+  config:   shellprocess_bootstrap.conf
+
+EOF
+)
+
+    if grep -q "shellprocess_bootstrap.conf" "$settings"; then
+        return 0
+    fi
+
+    tmp="$(mktemp)"
+    awk -v block="$instance_block" '
+        /^sequence:/ && !inserted { print block; inserted=1 }
+        { print }
+    ' "$settings" > "$tmp"
+    sudo mv "$tmp" "$settings"
+
+    if grep -q "shellprocess@bootstrap" "$settings"; then
+        return 0
+    fi
+
+    tmp="$(mktemp)"
+    awk '
+        /^- exec:/ { in_exec=1 }
+        in_exec && $0 ~ /^  - pacstrap$/ {
+            print
+            print "  - shellprocess@bootstrap"
+            inserted=1
+            next
+        }
+        in_exec && /^- show:/ {
+            if (!inserted) {
+                print "  - shellprocess@bootstrap"
+                inserted=1
+            }
+            in_exec=0
+        }
+        { print }
+    ' "$settings" > "$tmp"
+    sudo mv "$tmp" "$settings"
+}
+
 main() {
     # Remove current keyring first, to complete initiate it
     sudo rm -rf /etc/pacman.d/gnupg
@@ -45,6 +94,7 @@ main() {
 EOF
 
     sudo cp "/usr/share/calamares/settings_${mode}.conf" /etc/calamares/settings.conf
+    patch_calamares_settings
     exec pkexec-wrapper calamares -D6 >> $log
 }
 
